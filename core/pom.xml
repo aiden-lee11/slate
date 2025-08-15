@@ -22,9 +22,9 @@
 			<url>https://repo.maven.apache.org/maven2</url>
 		</repository>
 		<repository>
-			<id>pinrepo-snapshot</id>
-			<name>pinrepo-snapshot</name>
-			<url>https://mavenrepo.pinadmin.com/snapshot</url>
+			<id>artifactory-snapshot</id>
+			<name>artifactory-snapshot</name>
+			<url>https://artifacts-prod-use1.pinadmin.com/artifactory/maven_private_snapshots-jar-bazel-prod-local/</url>
 			<releases>
 				<enabled>false</enabled>
 			</releases>
@@ -34,9 +34,9 @@
 			</snapshots>
 		</repository>
 		<repository>
-			<id>pinrepo-release</id>
-			<name>pinrepo-release</name>
-			<url>https://mavenrepo-external.pinadmin.com/release</url>
+			<id>artifactory-release</id>
+			<name>artifactory-release</name>
+			<url>https://artifacts-prod-use1.pinadmin.com/artifactory/mavenrepo-remote-cache-backup-local/release</url>
 			<releases>
 				<enabled>true</enabled>
 			</releases>
@@ -45,9 +45,9 @@
 			</snapshots>
 		</repository>
 		<repository>
-			<id>pinrepo-thirdparty</id>
-			<name>pinrepo-thirdparty</name>
-			<url>https://mavenrepo-external.pinadmin.com/thirdparty</url>
+			<id>artifactory-thirdparty</id>
+			<name>artifactory-thirdparty</name>
+			<url>https://artifacts-prod-use1.pinadmin.com/artifactory/mavenrepo-remote-cache-backup-local/thirdparty</url>
 		</repository>
 		<repository>
 			<id>jitpack.io</id>
