@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams, useParams } from 'react-router-dom';
 import { RootState } from '../../store/index';
@@ -13,6 +13,7 @@ import {
     setOpenResourceEditor,
 } from '../../store/slice/builder';
 import { TNode } from '../../const/types';
+import { decodeGraphFragment, nodesFromResourceMap } from '../../const/graphHandoff';
 import TopologyBuilder from '../../topology/TopologyBuilder';
 import { useSnackBar } from '../../context/SnackbarContext';
 import { useLoadingSpinner } from '../../context/LoadingSpinnerContext';
@@ -29,13 +30,26 @@ const BuilderView: React.FC<IBuilderViewProps> = () => {
     const dispatch = useDispatch();
     const { showSnackbar } = useSnackBar();
     const { showLoadingOverlay } = useLoadingSpinner();
-    const { resourceDefinitions, selectedTabId } = useSelector(selectBuilderState);
+    const { resourceDefinitions, selectedTabId, workspaceLoaded } = useSelector(selectBuilderState);
+    const hydratedFromFragmentRef = useRef(false);
     const tabData = useSelector((state: RootState) => selectWorkspaceTabData(state, selectedTabId));
     const { nodes, edges } = tabData ?? {};
 
     useEffect(() => {
         fetchResourceDefinitions();
     }, []);
+
+    // Hydrate a create-only graph handed off via the URL fragment (#graph=...).
+    // Gated on workspaceLoaded so we run *after* TopologyBuilder's onRestore has
+    // set up a consistent tabs map + selectedTabId; running during mount races
+    // that restore and the injected nodes get dropped.
+    useEffect(() => {
+        if (!workspaceLoaded || hydratedFromFragmentRef.current) {
+            return;
+        }
+        hydratedFromFragmentRef.current = true;
+        hydrateFromFragment();
+    }, [workspaceLoaded]);
 
     const fetchResourceDefinitions = () => {
         showLoadingOverlay(true);
@@ -92,6 +106,27 @@ const BuilderView: React.FC<IBuilderViewProps> = () => {
                     message: `Could not find any resource with ID: ${resourceId}`,
                 });
             });
+    };
+
+    const hydrateFromFragment = async () => {
+        const map = await decodeGraphFragment(window.location.hash);
+        if (!map) {
+            return;
+        }
+        const nodes = nodesFromResourceMap(map);
+        dispatch(addWorkspaceTab({ makeActive: true }));
+        dispatch(addNodesToWorkspace({ nodes }));
+        dispatch(setNodeToEdit(null));
+        dispatch(setOpenResourceEditor(false));
+
+        // Remove the payload from the address bar / current history entry so it
+        // doesn't re-hydrate on re-render, linger in the URL, or get re-shared.
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+        showSnackbar({
+            type: 'success',
+            message: 'Loaded proposed graph — review, run Plan, then Execute.',
+        });
     };
 
     if (!resourceDefinitions) {
