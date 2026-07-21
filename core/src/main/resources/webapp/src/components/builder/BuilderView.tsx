@@ -13,7 +13,7 @@ import {
     setOpenResourceEditor,
 } from '../../store/slice/builder';
 import { TNode } from '../../const/types';
-import { decodeGraphFragment, nodesFromResourceMap } from '../../const/graphHandoff';
+import { decodeGraphFragment, hasGraphFragment, nodesFromResourceMap } from '../../const/graphHandoff';
 import TopologyBuilder from '../../topology/TopologyBuilder';
 import { useSnackBar } from '../../context/SnackbarContext';
 import { useLoadingSpinner } from '../../context/LoadingSpinnerContext';
@@ -109,24 +109,42 @@ const BuilderView: React.FC<IBuilderViewProps> = () => {
     };
 
     const hydrateFromFragment = async () => {
-        const map = await decodeGraphFragment(window.location.hash);
-        if (!map) {
+        // Nothing to do (and nothing to scrub) if there's no #graph= payload.
+        if (!hasGraphFragment(window.location.hash)) {
             return;
         }
-        const nodes = nodesFromResourceMap(map);
-        dispatch(addWorkspaceTab({ makeActive: true }));
-        dispatch(addNodesToWorkspace({ nodes }));
-        dispatch(setNodeToEdit(null));
-        dispatch(setOpenResourceEditor(false));
+        const map = await decodeGraphFragment(window.location.hash);
+        if (map) {
+            const nodes = nodesFromResourceMap(map);
+            dispatch(addWorkspaceTab({ makeActive: true }));
+            dispatch(addNodesToWorkspace({ nodes }));
+            dispatch(setNodeToEdit(null));
+            dispatch(setOpenResourceEditor(false));
+            showSnackbar({
+                type: 'success',
+                message: 'Loaded proposed graph — review, run Plan, then Execute.',
+            });
+        } else {
+            // A #graph= payload was present but invalid (malformed, or not a
+            // create-only graph). No-op the hydration, but tell the user why
+            // nothing loaded, and still scrub it below.
+            console.warn('Ignoring invalid #graph= handoff payload.');
+            showSnackbar({
+                type: 'error',
+                message: 'That graph link was invalid or unsupported — nothing was loaded.',
+            });
+        }
 
-        // Remove the payload from the address bar / current history entry so it
-        // doesn't re-hydrate on re-render, linger in the URL, or get re-shared.
-        window.history.replaceState(null, '', window.location.pathname + window.location.search);
-
-        showSnackbar({
-            type: 'success',
-            message: 'Loaded proposed graph — review, run Plan, then Execute.',
-        });
+        // Remove the payload from the address bar / current history entry —
+        // whether it hydrated or was rejected — so it doesn't re-hydrate on
+        // re-render, linger in the URL, or get re-shared. Preserve the existing
+        // history state (React Router keeps its location key/idx there) so we
+        // only drop the fragment, not the router metadata.
+        window.history.replaceState(
+            window.history.state,
+            '',
+            window.location.pathname + window.location.search
+        );
     };
 
     if (!resourceDefinitions) {

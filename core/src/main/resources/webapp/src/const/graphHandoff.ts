@@ -1,4 +1,5 @@
 import { INodeData, TNode } from './types';
+import { NEW_NODE_ID_PREFIX } from './constants';
 
 /**
  * Agent -> Builder handoff.
@@ -13,6 +14,13 @@ import { INodeData, TNode } from './types';
  * included in the Referer header, so the graph stays client-side only. The
  * Builder decodes it and hydrates the workspace by reusing the same node-
  * injection path recipes use (see nodesFromResourceMap / addNodesToWorkspace).
+ *
+ * The handoff is create-only, and that is *enforced* here (see
+ * isCreateOnlyResource), not merely documented: the fragment is attacker-
+ * controllable (a crafted link) and the decoded graph flows straight into the
+ * workspace and then Plan/Execute. Every resource must be a brand-new node
+ * (temporary id, the same convention isNewNode uses) and may not request an
+ * update or deletion of an existing resource.
  */
 export type ResourceMap = Record<string, INodeData>;
 
@@ -47,8 +55,51 @@ const bytesToText = async (bytes: Uint8Array): Promise<string> => {
 };
 
 /**
+ * A handed-off resource must be a well-formed, create-only node:
+ *  - a plain object keyed in the map by its own id,
+ *  - a *temporary* id (NEW_NODE_ID_PREFIX) so the backend treats it as a create
+ *    rather than an update/delete of an existing resource,
+ *  - not a deletion (`deleted: true`),
+ *  - carrying the fields we dereference to render a node and to Plan.
+ * Anything else fails validation and causes the whole payload to be rejected,
+ * so decodeGraphFragment returns null instead of letting a malformed or
+ * destructive graph reach the workspace.
+ */
+const isCreateOnlyResource = (id: string, value: unknown): value is INodeData => {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+    const r = value as Record<string, unknown>;
+    // create-only: temporary id that matches its map key.
+    if (typeof r.id !== 'string' || r.id !== id || !r.id.startsWith(NEW_NODE_ID_PREFIX)) {
+        return false;
+    }
+    // reject destructive/update intent — a create-only graph never deletes.
+    if (r.deleted === true) {
+        return false;
+    }
+    // shape required to render a node (type) and to Plan (desiredState).
+    if (typeof r.resourceDefinitionClass !== 'string') {
+        return false;
+    }
+    if (!r.desiredState || typeof r.desiredState !== 'object') {
+        return false;
+    }
+    return true;
+};
+
+/**
+ * Whether a `#graph=` payload is present at all. Lets callers distinguish
+ * "no handoff link" from "a handoff link that failed validation" — both of
+ * which decodeGraphFragment reports as null — so a rejected payload can still
+ * be scrubbed from the URL.
+ */
+export const hasGraphFragment = (hash: string): boolean => GRAPH_FRAGMENT_RE.test(hash);
+
+/**
  * Decode a `#graph=<encoded>` fragment into a resource map. Returns null when
- * the fragment is absent, empty, or malformed (never throws).
+ * the fragment is absent, empty, malformed, or not a valid create-only graph
+ * (never throws).
  */
 export const decodeGraphFragment = async (hash: string): Promise<ResourceMap | null> => {
     const match = GRAPH_FRAGMENT_RE.exec(hash);
@@ -58,11 +109,20 @@ export const decodeGraphFragment = async (hash: string): Promise<ResourceMap | n
     try {
         const bytes = base64urlToBytes(match[1]);
         const json = await bytesToText(bytes);
-        const map = JSON.parse(json) as ResourceMap;
-        if (map && typeof map === 'object' && Object.keys(map).length > 0) {
-            return map;
+        const parsed = JSON.parse(json);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null;
         }
-        return null;
+        const entries = Object.entries(parsed);
+        if (entries.length === 0) {
+            return null;
+        }
+        // Reject the whole payload unless every resource is create-only and
+        // well-formed; a partial hydrate of a tampered graph is worse than none.
+        if (!entries.every(([id, value]) => isCreateOnlyResource(id, value))) {
+            return null;
+        }
+        return parsed as ResourceMap;
     } catch (error) {
         console.error('Failed to decode graph handoff fragment', error);
         return null;
