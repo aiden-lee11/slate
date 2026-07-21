@@ -12,15 +12,20 @@ import { NEW_NODE_ID_PREFIX } from './constants';
  *
  * The fragment is never sent to the server, proxies, or logs and is not
  * included in the Referer header, so the graph stays client-side only. The
- * Builder decodes it and hydrates the workspace by reusing the same node-
- * injection path recipes use (see nodesFromResourceMap / addNodesToWorkspace).
+ * Builder decodes it into a *new* workspace tab by reusing the same node-
+ * injection path recipes use (see nodesFromResourceMap / addNodesToWorkspace),
+ * so it never clobbers the user's existing tabs, and the user still drives
+ * Plan -> Execute themselves.
  *
- * The handoff is create-only, and that is *enforced* here (see
- * isCreateOnlyResource), not merely documented: the fragment is attacker-
- * controllable (a crafted link) and the decoded graph flows straight into the
- * workspace and then Plan/Execute. Every resource must be a brand-new node
- * (temporary id, the same convention isNewNode uses) and may not request an
- * update or deletion of an existing resource.
+ * "Create-only" here is a *convention* for the trusted agent->user handoff, not
+ * a security guarantee, and isCreateOnlyResource is a sanity guard, not
+ * enforcement. Two reasons: the backend classifies each resource as a create or
+ * an update by database existence of its id (GraphEngine.planGraphUpdate), not
+ * by the tmp prefix; and a browser tab is not a security boundary — Execute runs
+ * against the same authenticated session regardless. The checks below just keep
+ * a trusted handoff aligned with how the Builder mints new nodes and stop a
+ * malformed payload from reaching the canvas. Enforcing create-only for
+ * untrusted or shareable links would require server-side validation.
  */
 export type ResourceMap = Record<string, INodeData>;
 
@@ -55,27 +60,30 @@ const bytesToText = async (bytes: Uint8Array): Promise<string> => {
 };
 
 /**
- * A handed-off resource must be a well-formed, create-only node:
- *  - a plain object keyed in the map by its own id,
- *  - a *temporary* id (NEW_NODE_ID_PREFIX) so the backend treats it as a create
- *    rather than an update/delete of an existing resource,
- *  - not a deletion (`deleted: true`),
- *  - carrying the fields we dereference to render a node and to Plan.
- * Anything else fails validation and causes the whole payload to be rejected,
- * so decodeGraphFragment returns null instead of letting a malformed or
- * destructive graph reach the workspace.
+ * Validate a handed-off resource. This does two jobs at once:
+ *  - Correctness: guarantees decodeGraphFragment never returns something that
+ *    throws later in nodesFromResourceMap — value must be a plain object keyed
+ *    by its own id, with the fields we dereference (resourceDefinitionClass to
+ *    render, desiredState to Plan).
+ *  - Create-only *convention* (a sanity guard, not enforcement — see the file
+ *    header): a temporary id (NEW_NODE_ID_PREFIX, matching how the Builder mints
+ *    new nodes) and no deletion.
+ * `deleted` must be absent or literally false; anything else is rejected,
+ * including the string "true", which Gson coerces to boolean server-side.
+ * A failing resource rejects the whole payload (decodeGraphFragment -> null).
  */
 const isCreateOnlyResource = (id: string, value: unknown): value is INodeData => {
     if (!value || typeof value !== 'object') {
         return false;
     }
     const r = value as Record<string, unknown>;
-    // create-only: temporary id that matches its map key.
+    // create-only convention: temporary id that matches its map key.
     if (typeof r.id !== 'string' || r.id !== id || !r.id.startsWith(NEW_NODE_ID_PREFIX)) {
         return false;
     }
-    // reject destructive/update intent — a create-only graph never deletes.
-    if (r.deleted === true) {
+    // no deletion. Accept only absent or literal false — reject e.g. "true"
+    // (string), which would survive Gson's boolean coercion on the server.
+    if ('deleted' in r && r.deleted !== false) {
         return false;
     }
     // shape required to render a node (type) and to Plan (desiredState).
